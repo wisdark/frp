@@ -16,7 +16,7 @@ frp 是一个可用于内网穿透的高性能的反向代理应用，支持 tcp
     * [通过 ssh 访问公司内网机器](#通过-ssh-访问公司内网机器)
     * [通过自定义域名访问部署于内网的 web 服务](#通过自定义域名访问部署于内网的-web-服务)
     * [转发 DNS 查询请求](#转发-dns-查询请求)
-    * [转发 Unix域套接字](#转发-unix域套接字)
+    * [转发 Unix 域套接字](#转发-unix-域套接字)
     * [对外提供简单的文件访问服务](#对外提供简单的文件访问服务)
     * [为本地 HTTP 服务启用 HTTPS](#为本地-http-服务启用-https)
     * [安全地暴露内网服务](#安全地暴露内网服务)
@@ -33,6 +33,8 @@ frp 是一个可用于内网穿透的高性能的反向代理应用，支持 tcp
     * [客户端查看代理状态](#客户端查看代理状态)
     * [端口白名单](#端口白名单)
     * [端口复用](#端口复用)
+    * [限速](#限速)
+        * [代理限速](#代理限速)
     * [TCP 多路复用](#tcp-多路复用)
     * [底层通信可选 kcp 协议](#底层通信可选-kcp-协议)
     * [连接池](#连接池)
@@ -129,7 +131,7 @@ master 分支用于发布稳定版本，dev 分支用于开发，您可以尝试
   vhost_http_port = 8080
   ```
 
-2. 启动 frps；
+2. 启动 frps：
 
   `./frps -c ./frps.ini`
 
@@ -194,7 +196,7 @@ DNS 查询请求通常使用 UDP 协议，frp 支持对内网 UDP 服务的穿�
 
   `dig @x.x.x.x -p 6000 www.google.com`
 
-### 转发 Unix域套接字
+### 转发 Unix 域套接字
 
 通过 tcp 端口访问内网的 unix域套接字(例如和 docker daemon 通信)。
 
@@ -270,6 +272,7 @@ frps 的部署步骤同上。
   plugin_crt_path = ./server.crt
   plugin_key_path = ./server.key
   plugin_host_header_rewrite = 127.0.0.1
+  plugin_header_X-From-Where = frp
   ```
 
 2. 通过浏览器访问 `https://test.yourdomain.com` 即可。
@@ -530,6 +533,23 @@ allow_ports = 2000-3000,3001,3003,4000-50000
 
 后续会尝试允许多个 proxy 绑定同一个远端端口的不同协议。
 
+### 限速
+
+#### 代理限速
+
+目前支持在客户端的代理配置中设置代理级别的限速，限制单个 proxy 可以占用的带宽。
+
+```ini
+# frpc.ini
+[ssh]
+type = tcp
+local_port = 22
+remote_port = 6000
+bandwith_limit = 1MB
+```
+
+在代理配置中增加 `bandwith_limit` 字段启用此功能，目前仅支持 `MB` 和 `KB` 单位。
+
 ### TCP 多路复用
 
 从 v0.10.0 版本开始，客户端和服务器端之间的连接支持多路复用，不再需要为每一个用户请求创建一个连接，使连接建立的延迟降低，并且避免了大量文件描述符的占用，使 frp 可以承载更高的并发数。
@@ -597,7 +617,7 @@ tcp_mux = false
 
 可以将多个相同类型的 proxy 加入到同一个 group 中，从而实现负载均衡的功能。
 
-目前只支持 tcp 类型的 proxy。
+目前只支持 TCP 和 HTTP 类型的 proxy。
 
 ```ini
 # frpc.ini
@@ -618,7 +638,9 @@ group_key = 123
 
 用户连接 frps 服务器的 80 端口，frps 会将接收到的用户连接随机分发给其中一个存活的 proxy。这样可以在一台 frpc 机器挂掉后仍然有其他节点能够提供服务。
 
-要求 `group_key` 相同，做权限验证，且 `remote_port` 相同。
+TCP 类型代理要求 `group_key` 相同，做权限验证，且 `remote_port` 相同。
+
+HTTP 类型代理要求 `group_key, custom_domains 或 subdomain 和 locations` 相同。
 
 ### 健康检查
 
