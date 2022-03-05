@@ -17,7 +17,6 @@ package client
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -34,8 +33,10 @@ import (
 	"github.com/fatedier/frp/pkg/transport"
 	"github.com/fatedier/frp/pkg/util/log"
 	frpNet "github.com/fatedier/frp/pkg/util/net"
+	"github.com/fatedier/frp/pkg/util/util"
 	"github.com/fatedier/frp/pkg/util/version"
 	"github.com/fatedier/frp/pkg/util/xlog"
+	libdial "github.com/fatedier/golib/net/dial"
 
 	fmux "github.com/hashicorp/yamux"
 )
@@ -108,7 +109,7 @@ func (svr *Service) Run() error {
 			if svr.cfg.LoginFailExit {
 				return err
 			}
-			time.Sleep(10 * time.Second)
+			util.RandomSleep(10*time.Second, 0.9, 1.1)
 		} else {
 			// login success
 			ctl := NewControl(svr.ctx, svr.runID, conn, session, svr.cfg, svr.pxyCfgs, svr.visitorCfgs, svr.serverUDPPort, svr.authSetter)
@@ -157,8 +158,11 @@ func (svr *Service) keepControllerWorking() {
 
 		// the first three retry with no delay
 		if reconnectCounts > 3 {
-			time.Sleep(reconnectDelay)
+			util.RandomSleep(reconnectDelay, 0.9, 1.1)
+			xl.Info("wait %v to reconnect", reconnectDelay)
 			reconnectDelay *= 2
+		} else {
+			util.RandomSleep(time.Second, 0, 0.5)
 		}
 		reconnectCounts++
 
@@ -174,18 +178,12 @@ func (svr *Service) keepControllerWorking() {
 			xl.Info("try to reconnect to server...")
 			conn, session, err := svr.login()
 			if err != nil {
-				xl.Warn("reconnect to server error: %v", err)
-				time.Sleep(delayTime)
+				xl.Warn("reconnect to server error: %v, wait %v for another retry", err, delayTime)
+				util.RandomSleep(delayTime, 0.9, 1.1)
 
-				opErr := &net.OpError{}
-				// quick retry for dial error
-				if errors.As(err, &opErr) && opErr.Op == "dial" {
-					delayTime = 2 * time.Second
-				} else {
-					delayTime = delayTime * 2
-					if delayTime > maxDelayTime {
-						delayTime = maxDelayTime
-					}
+				delayTime = delayTime * 2
+				if delayTime > maxDelayTime {
+					delayTime = maxDelayTime
 				}
 				continue
 			}
@@ -228,8 +226,34 @@ func (svr *Service) login() (conn net.Conn, session *fmux.Session, err error) {
 		}
 	}
 
-	address := net.JoinHostPort(svr.cfg.ServerAddr, strconv.Itoa(svr.cfg.ServerPort))
-	conn, err = frpNet.ConnectServerByProxyWithTLS(svr.cfg.HTTPProxy, svr.cfg.Protocol, address, tlsConfig, svr.cfg.DisableCustomTLSFirstByte)
+	proxyType, addr, auth, err := libdial.ParseProxyURL(svr.cfg.HTTPProxy)
+	if err != nil {
+		xl.Error("fail to parse proxy url")
+		return
+	}
+	dialOptions := []libdial.DialOption{}
+	protocol := svr.cfg.Protocol
+	if protocol == "websocket" {
+		protocol = "tcp"
+		dialOptions = append(dialOptions, libdial.WithAfterHook(libdial.AfterHook{Hook: frpNet.DialHookWebsocket()}))
+	}
+	if svr.cfg.ConnectServerLocalIP != "" {
+		dialOptions = append(dialOptions, libdial.WithLocalAddr(svr.cfg.ConnectServerLocalIP))
+	}
+	dialOptions = append(dialOptions,
+		libdial.WithProtocol(protocol),
+		libdial.WithTimeout(time.Duration(svr.cfg.DialServerTimeout)*time.Second),
+		libdial.WithProxy(proxyType, addr),
+		libdial.WithProxyAuth(auth),
+		libdial.WithTLSConfig(tlsConfig),
+		libdial.WithAfterHook(libdial.AfterHook{
+			Hook: frpNet.DialHookCustomTLSHeadByte(tlsConfig != nil, svr.cfg.DisableCustomTLSFirstByte),
+		}),
+	)
+	conn, err = libdial.Dial(
+		net.JoinHostPort(svr.cfg.ServerAddr, strconv.Itoa(svr.cfg.ServerPort)),
+		dialOptions...,
+	)
 	if err != nil {
 		return
 	}
@@ -245,7 +269,7 @@ func (svr *Service) login() (conn net.Conn, session *fmux.Session, err error) {
 
 	if svr.cfg.TCPMux {
 		fmuxCfg := fmux.DefaultConfig()
-		fmuxCfg.KeepAliveInterval = 20 * time.Second
+		fmuxCfg.KeepAliveInterval = time.Duration(svr.cfg.TCPMuxKeepaliveInterval) * time.Second
 		fmuxCfg.LogOutput = io.Discard
 		session, err = fmux.Client(conn, fmuxCfg)
 		if err != nil {
