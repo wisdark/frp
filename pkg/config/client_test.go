@@ -17,18 +17,17 @@ package config
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/fatedier/frp/pkg/auth"
 	"github.com/fatedier/frp/pkg/consts"
-
-	"github.com/stretchr/testify/assert"
 )
 
 const (
 	testUser = "test"
 )
 
-var (
-	testClientBytesWithFull = []byte(`
+var testClientBytesWithFull = []byte(`
 		# [common] is integral section
 		[common]
 		server_addr = 0.0.0.9
@@ -237,7 +236,6 @@ var (
 		use_encryption = false
 		use_compression = false
 	`)
-)
 
 func Test_LoadClientCommonConf(t *testing.T) {
 	assert := assert.New(t)
@@ -262,6 +260,7 @@ func Test_LoadClientCommonConf(t *testing.T) {
 		ServerAddr:              "0.0.0.9",
 		ServerPort:              7009,
 		DialServerTimeout:       10,
+		DialServerKeepAlive:     7200,
 		HTTPProxy:               "http://user:passwd@192.168.1.128:8080",
 		LogFile:                 "./frpc.log9",
 		LogWay:                  "file",

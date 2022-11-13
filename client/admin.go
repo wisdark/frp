@@ -17,17 +17,18 @@ package client
 import (
 	"net"
 	"net/http"
+	"net/http/pprof"
 	"time"
+
+	"github.com/gorilla/mux"
 
 	"github.com/fatedier/frp/assets"
 	frpNet "github.com/fatedier/frp/pkg/util/net"
-
-	"github.com/gorilla/mux"
 )
 
 var (
-	httpServerReadTimeout  = 10 * time.Second
-	httpServerWriteTimeout = 10 * time.Second
+	httpServerReadTimeout  = 60 * time.Second
+	httpServerWriteTimeout = 60 * time.Second
 )
 
 func (svr *Service) RunAdminServer(address string) (err error) {
@@ -35,6 +36,15 @@ func (svr *Service) RunAdminServer(address string) (err error) {
 	router := mux.NewRouter()
 
 	router.HandleFunc("/healthz", svr.healthz)
+
+	// debug
+	if svr.cfg.PprofEnable {
+		router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		router.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		router.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		router.PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index)
+	}
 
 	subRouter := router.NewRoute().Subrouter()
 	user, passwd := svr.cfg.AdminUser, svr.cfg.AdminPwd
@@ -67,6 +77,8 @@ func (svr *Service) RunAdminServer(address string) (err error) {
 		return err
 	}
 
-	go server.Serve(ln)
+	go func() {
+		_ = server.Serve(ln)
+	}()
 	return
 }

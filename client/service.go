@@ -19,12 +19,18 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"math/rand"
 	"net"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/fatedier/golib/crypto"
+	libdial "github.com/fatedier/golib/net/dial"
+	fmux "github.com/hashicorp/yamux"
 
 	"github.com/fatedier/frp/assets"
 	"github.com/fatedier/frp/pkg/auth"
@@ -36,10 +42,12 @@ import (
 	"github.com/fatedier/frp/pkg/util/util"
 	"github.com/fatedier/frp/pkg/util/version"
 	"github.com/fatedier/frp/pkg/util/xlog"
-	libdial "github.com/fatedier/golib/net/dial"
-
-	fmux "github.com/hashicorp/yamux"
 )
+
+func init() {
+	crypto.DefaultSalt = "frp"
+	rand.Seed(time.Now().UnixNano())
+}
 
 // Service is a client service.
 type Service struct {
@@ -73,8 +81,12 @@ type Service struct {
 	cancel context.CancelFunc
 }
 
-func NewService(cfg config.ClientCommonConf, pxyCfgs map[string]config.ProxyConf, visitorCfgs map[string]config.VisitorConf, cfgFile string) (svr *Service, err error) {
-
+func NewService(
+	cfg config.ClientCommonConf,
+	pxyCfgs map[string]config.ProxyConf,
+	visitorCfgs map[string]config.VisitorConf,
+	cfgFile string,
+) (svr *Service, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	svr = &Service{
 		authSetter:  auth.NewAuthSetter(cfg.ClientConfig),
@@ -97,6 +109,21 @@ func (svr *Service) GetController() *Control {
 
 func (svr *Service) Run() error {
 	xl := xlog.FromContextSafe(svr.ctx)
+
+	// set custom DNSServer
+	if svr.cfg.DNSServer != "" {
+		dnsAddr := svr.cfg.DNSServer
+		if !strings.Contains(dnsAddr, ":") {
+			dnsAddr += ":53"
+		}
+		// Change default dns server for frpc
+		net.DefaultResolver = &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				return net.Dial("udp", dnsAddr)
+			},
+		}
+	}
 
 	// login to frps
 	for {
@@ -175,13 +202,17 @@ func (svr *Service) keepControllerWorking() {
 		}
 
 		for {
+			if atomic.LoadUint32(&svr.exit) != 0 {
+				return
+			}
+
 			xl.Info("try to reconnect to server...")
 			conn, session, err := svr.login()
 			if err != nil {
 				xl.Warn("reconnect to server error: %v, wait %v for another retry", err, delayTime)
 				util.RandomSleep(delayTime, 0.9, 1.1)
 
-				delayTime = delayTime * 2
+				delayTime *= 2
 				if delayTime > maxDelayTime {
 					delayTime = maxDelayTime
 				}
@@ -243,6 +274,7 @@ func (svr *Service) login() (conn net.Conn, session *fmux.Session, err error) {
 	dialOptions = append(dialOptions,
 		libdial.WithProtocol(protocol),
 		libdial.WithTimeout(time.Duration(svr.cfg.DialServerTimeout)*time.Second),
+		libdial.WithKeepAlive(time.Duration(svr.cfg.DialServerKeepAlive)*time.Second),
 		libdial.WithProxy(proxyType, addr),
 		libdial.WithProxyAuth(auth),
 		libdial.WithTLSConfig(tlsConfig),
@@ -305,11 +337,11 @@ func (svr *Service) login() (conn net.Conn, session *fmux.Session, err error) {
 	}
 
 	var loginRespMsg msg.LoginResp
-	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	if err = msg.ReadMsgInto(conn, &loginRespMsg); err != nil {
 		return
 	}
-	conn.SetReadDeadline(time.Time{})
+	_ = conn.SetReadDeadline(time.Time{})
 
 	if loginRespMsg.Error != "" {
 		err = fmt.Errorf("%s", loginRespMsg.Error)
@@ -332,7 +364,14 @@ func (svr *Service) ReloadConf(pxyCfgs map[string]config.ProxyConf, visitorCfgs 
 	svr.visitorCfgs = visitorCfgs
 	svr.cfgMu.Unlock()
 
-	return svr.ctl.ReloadConf(pxyCfgs, visitorCfgs)
+	svr.ctlMu.RLock()
+	ctl := svr.ctl
+	svr.ctlMu.RUnlock()
+
+	if ctl != nil {
+		return svr.ctl.ReloadConf(pxyCfgs, visitorCfgs)
+	}
+	return nil
 }
 
 func (svr *Service) Close() {
@@ -341,8 +380,12 @@ func (svr *Service) Close() {
 
 func (svr *Service) GracefulClose(d time.Duration) {
 	atomic.StoreUint32(&svr.exit, 1)
+
+	svr.ctlMu.RLock()
 	if svr.ctl != nil {
 		svr.ctl.GracefulClose(d)
 	}
+	svr.ctlMu.RUnlock()
+
 	svr.cancel()
 }
