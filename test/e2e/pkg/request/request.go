@@ -14,8 +14,8 @@ import (
 
 	libdial "github.com/fatedier/golib/net/dial"
 
+	httppkg "github.com/fatedier/frp/pkg/util/http"
 	"github.com/fatedier/frp/test/e2e/pkg/rpc"
-	"github.com/fatedier/frp/test/e2e/pkg/utils"
 )
 
 type Request struct {
@@ -115,7 +115,7 @@ func (r *Request) HTTPHeaders(headers map[string]string) *Request {
 }
 
 func (r *Request) HTTPAuth(user, password string) *Request {
-	r.authValue = utils.BasicAuth(user, password)
+	r.authValue = httppkg.BasicAuth(user, password)
 	return r
 }
 
@@ -145,7 +145,10 @@ func (r *Request) Do() (*Response, error) {
 		err  error
 	)
 
-	addr := net.JoinHostPort(r.addr, strconv.Itoa(r.port))
+	addr := r.addr
+	if r.port > 0 {
+		addr = net.JoinHostPort(r.addr, strconv.Itoa(r.port))
+	}
 	// for protocol http and https
 	if r.protocol == "http" || r.protocol == "https" {
 		return r.sendHTTPRequest(r.method, fmt.Sprintf("%s://%s%s", r.protocol, addr, r.path),

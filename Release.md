@@ -1,8 +1,7 @@
-### New
+### Features
 
-* Added config `bandwidth_limit_mode` in frpc, default value is `client` which is current behavior. Optional value is `server`, to enable bandwidth limit in server. The major aim is to let server plugin has the ability to modify bandwidth limit for each proxy.
+* `https2http` and `https2https` plugin now supports `X-Forwared-For` header.
 
-### Improve
+### Fixes
 
-* `dns_server` supports ipv6.
-* frpc supports graceful shutdown for protocol `quic`.
+* `X-Forwared-For` header is now correctly set in the request to the backend server for proxy type http.
