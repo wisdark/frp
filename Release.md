@@ -1,8 +1,5 @@
 ### Features
 
-* Added a new plugin "http2http" which allows forwarding HTTP requests to another HTTP server, supporting options like local address binding, host header rewrite, and custom request headers.
-* Added `enableHTTP2` option to control whether to enable HTTP/2 in plugin https2http and https2https, default is true.
-
-### Changes
-
-* Plugin https2http & https2https: return 421 `Misdirected Request` if host not match sni.
+* `tzdata` is installed by default in the container image, and the time zone can be set using the `TZ` environment variable.
+* The `quic-bind-port` command line parameter is supported in frps, which specifies the port for accepting frpc connections using the QUIC protocol.
+* The vhost HTTP proxy of frps supports the h2c protocol.
